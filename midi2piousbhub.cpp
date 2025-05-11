@@ -778,6 +778,7 @@ int main()
     core0_booting = false;
     while (1) {
         instance.task();
+        instance.blink_led();
     }
 }
 
