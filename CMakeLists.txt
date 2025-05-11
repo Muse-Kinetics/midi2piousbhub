@@ -19,6 +19,10 @@ cmake_minimum_required(VERSION 3.13)
 set(BOARD pico_sdk)
 # Set the TinyUSB log level
 # set(LOG 2)
+
+# Use our local pico-sdk
+set(PICO_SDK_PATH ${CMAKE_CURRENT_LIST_DIR}/../pico-sdk)
+
 include(pico_sdk_import.cmake)
 
 set(target_proj midi2piousbhub)
