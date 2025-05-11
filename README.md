@@ -18,9 +18,9 @@ built-in USB port's serial (CDC ACM) interface.
 The software uses some of the Pico board's program flash for a file system
 to store configurations in presets. If you save your settings to a preset, then
 the midi2piousbhub software will automatically reload the last saved preset on startup
-and when you plug a Connected MIDI Device to the hub. You can back up any or all of
+and when you plug a USB MIDI Device to the host port. You can back up any or all of
 your presets to a USB Flash drive connected to the USB hub. Presets are stored in
-JSON format. 
+JSON format.
 
 # Hardware
 My first test circuit used a Raspberry Pi Pico board, a USB A breakout board,
@@ -214,10 +214,11 @@ descriptor to memory.
 
 # Terms this document uses
 - **Connected MIDI Device**: a MIDI device connected to a USB hub port or to a serial
-port MIDI DIN connector.
+port MIDI DIN connector, or the USB C Device interface or the Bluetooth LE MIDI.
 - **USB ID**: A pair of numbers the Connected MIDI Device reports to the
 hub when it connects. They are supposed to be unique to a particular
-product.
+product. The MIDI DIN connectors, the USB C Device interface, and the Bluetooth LE
+MIDI interface have fake USB ID numbers to be compatible with this system.
 - **Routing Matrix**: The software that sends MIDI data to and from Connected MIDI Devices
 - **Terminal**: a MIDI data input to or output from the Routing Matrix.
 - **FROM terminal**: an input to the Routing Matrix. It will be a MIDI OUT signal from
@@ -237,6 +238,10 @@ direction is the USB ID followed by either a "F" for a FROM data stream or
 device. The Connected MIDI Device sends it to the hub on connection; it is a more friendly
 name than USB ID, and is the easiest way to assocate the Connected MIDI Device
 with all the other info.
+- **Dedicated Device**: The DIN MIDI ports, the Bluetooth LE MIDI interface, and USB C Device
+interface always have place holders in the system, so you can always route them. These
+are therefore dedicated devices.
+
 
 # Command Line Commands
 ## help
@@ -280,8 +285,11 @@ Disconnect all routings.
 
 ## show
 Show a connection matrix of all MIDI devices connected to the hub. A blank box means "not
-connected" and an `x` in the box means "connected." For example, the following shows
+connected" and an `x` in the box means "connected." A '!' in the box means the dedicated
+device is routed but is not connected. For example, the following shows
 MIDI OUT of the "keys" device connected to the MIDI IN of the "lead" device.
+The "faders" device in this example is Bluetooth LE MIDI, and is currently not connected, so
+the connection to the "lead" device is shown with an '!'.
 
 ```
        TO-> |   |   |   |
@@ -301,17 +309,19 @@ lead        |   |   |   |
 ------------+---+---+---+
 keys        | x |   |   |
 ------------+---+---+---+
-faders      |   |   |   |
+faders      | ! |   |   |
 ------------+---+---+---+
 ```
 
 ## save \<preset name\>
 Save the current setup to the given \<preset name\>. If there is already a preset with that
-name, then it will be overwritten.
+name, then it will be overwritten. If the preset name is omitted, then the last saved
+preset is overwritten.
 
 ## load \<preset name\>
 Load the current setup from the given \<preset name\>. If the preset was not previously
-saved using the save command, then print an error message to the console.
+saved using the save command, then print an error message to the console. If the name
+is omitted, then the last saved preset is loaded.
 
 ## backup [\<preset name\>]
 Copy the specified preset to USB flash drive to a file on the drive named `/rppicomidi-midi2usbhub/<preset name>`. If no preset name is given, then all presets are copied to the
@@ -387,5 +397,20 @@ Connect to the specfied device index number from the scan list. Index 0 is the
 last connected device. TODO: right now this is the first device in the bonded
 device list.
 
+## btmidi-client-cancel-connect
+Cancel the pending client mode connection request.
+
+## btmidi-client-keep-connected `[0|1]`
+In client mode, the "keep connected" flag is 1 if the client should immediately
+attempt to reconnect if the currently connected server disconnects. If the
+"keep connected" flag is 0, then if the server disconnects, then the client
+will not attempt to disconnect. If you issue this command with no arguments,
+it will print the current flag state, 0 or 1. This flag is stored as part
+of the settings when you issue the save command.
+
 ## btmidi-server-start
 Leave client mode and enter server mode.
+
+## btmidi-get-state
+Prints Client or Server, Connected or Disconnected
+

@@ -121,7 +121,24 @@ public:
      * 
      * @return true if connected, false otherwise.
      */
-    bool is_connected() {if (is_client) return ble_midi_client_is_connected(); else return ble_midi_server_is_connected(); }
+    bool is_connected() {if (is_client) return ble_midi_client_is_ready(); else return ble_midi_server_is_connected(); }
+
+    /**
+     * @brief Get BDADDR and type of the last connected BLE MIDI server
+     *
+     * @param addr points to the 6 bytes to store the BDADDR (not modified if return value is BD_ADDR_TYPE_UNKNOWN)
+     * @return BD_ADDR_TYPE_UNKNOWN if not client mode or if last connected was never set. Otherwise, return the address type
+     */
+    int get_last_connected(uint8_t* addr) {if (is_client) return ble_midi_client_get_last_conntected(addr); return BD_ADDR_TYPE_UNKNOWN; }
+
+    /**
+     * @brief Set the BDADDR and type of the last connected BLE MIDI server
+     *
+     * @param addr_type is the BDADDR type of the last connected
+     * @param addr points to the 6-byte BDADDR of the lastt connected BLE MIDI server
+     * @return true if in client mode, false in server mode.
+     */
+    void set_last_connected(int addr_type, uint8_t addr[6]) {ble_midi_client_set_last_connected(addr_type, addr); }
 
     /**
      * @brief read a MIDI stream from the connected Bluetooth LE MIDI device
@@ -168,6 +185,11 @@ public:
     void scan_begin();
 
     bool is_server_mode() {return !is_client; }
+    bool is_client_mode() {return is_client; }
+    bool is_initialized() {return initialized; }
+    bool reconnect();
+    bool get_keep_client_connected();
+    void set_keep_client_connected(bool keep_client_connected_);
 private:
     /**
      * @brief called by static_packet_handler to handle BT Stack messages
