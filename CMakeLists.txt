@@ -1,3 +1,19 @@
+# == DO NOT EDIT THE FOLLOWING LINES for the Raspberry Pi Pico VS Code Extension to work ==
+if(WIN32)
+    set(USERHOME $ENV{USERPROFILE})
+else()
+    set(USERHOME $ENV{HOME})
+endif()
+set(sdkVersion 1.5.1)
+set(toolchainVersion 13_2_Rel1)
+set(picotoolVersion 2.0.0)
+set(picoVscode ${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
+if (EXISTS ${picoVscode})
+    include(${picoVscode})
+endif()
+# ====================================================================================
+set(PICO_BOARD pico CACHE STRING "Board type")
+
 cmake_minimum_required(VERSION 3.13)
 
 set(BOARD pico_sdk)
@@ -38,6 +54,7 @@ target_include_directories(midi2piousbhub PRIVATE
  ${CMAKE_CURRENT_LIST_DIR}
  ${EMBEDDED_CLI_PATH}/include
  ${CMAKE_CURRENT_LIST_DIR}/ext_lib/parson
+ ${PICO_SDK_PATH}/lib/tinyusb/hw/mcu/raspberry_pi/Pico-PIO-USB
 )
 
 target_link_options(midi2piousbhub PRIVATE -Xlinker --print-memory-usage)
