@@ -77,6 +77,7 @@
 #include <vector>
 #include <cstdint>
 #include <string>
+#include <cstring>
 #include "midi2piousbhub.h"
 #include "pico/stdlib.h"
 #include "pico/binary_info.h"
@@ -87,6 +88,17 @@
 #include "bsp/board_api.h"
 #include "preset_manager.h"
 #include "diskio.h"
+
+#include "MIDI_bytestream_parser.hpp"
+
+// HID Key codes and Report IDs for keyboard functionality
+#define HID_KEY_A 0x04
+#define HID_KEY_B 0x05
+#define HID_KEY_SPACE 0x2C
+#define HID_KEY_ENTER 0x28
+#define HID_KEY_DOWN_ARROW 0x51
+#define HID_KEY_UP_ARROW 0x52
+#define REPORT_ID_KEYBOARD 1
 
 // Because the PIO USB code runs in core 1
 // and USB MIDI OUT sends are triggered on core 0,
@@ -495,7 +507,7 @@ void rppicomidi::Midi2PioUsbhub::route_midi(Midi_out_port* out_port, const uint8
             }
         }
 #ifdef RPPICOMIDI_PICO_W
-        else
+        else if (out_port->devaddr == ble_devaddr)
         {
             uint8_t nwritten = blem.stream_write(buffer, bytes_read);
             if (nwritten != bytes_read) {
@@ -503,6 +515,10 @@ void rppicomidi::Midi2PioUsbhub::route_midi(Midi_out_port* out_port, const uint8
             }
         }
 #endif
+        else if (out_port->devaddr == keyboard_devaddr)
+        {
+            route_midi_to_keyboard(buffer, bytes_read);
+        }
     }
     else
     {
@@ -523,6 +539,132 @@ void rppicomidi::Midi2PioUsbhub::poll_midi_uart_rx()
         {
             route_midi(out_port, rx, nread);
         }
+    }
+}
+
+void rppicomidi::Midi2PioUsbhub::route_midi_to_keyboard(const uint8_t* buffer, uint32_t bytes_read)
+{
+    printf("route_midi_to_keyboard called, bytes_read=%lu\n", bytes_read);
+    static MidiBytestreamParser parser(nullptr);
+
+    if (bytes_read > 0)
+    {
+        for (size_t i = 0; i < bytes_read; i++) 
+        {
+            if (parser.parse(buffer[i]))
+            {
+                printf("Parsed MIDI message: ");
+                for (size_t j = 0; j < 3; j++) {
+                    printf("%d ", parser.msg[j]);
+                }
+                printf("\n");
+
+                uint8_t midi_note = parser.msg[1];
+                
+                // Map MIDI notes to HID key codes
+                uint8_t keycode = 0;
+                switch (midi_note) {
+                    case 38:
+                        keycode = HID_KEY_DOWN_ARROW;
+                        break;
+                    case 36:
+                        keycode = HID_KEY_UP_ARROW;
+                        break;
+                    case 47:
+                        keycode = HID_KEY_ENTER;
+                        break;
+                    case 42:
+                        keycode = HID_KEY_SPACE;
+                        break;
+                    default:
+                        // Ignore all other MIDI notes
+                        printf("Ignoring MIDI note: %d\n", midi_note);
+                        continue;
+                }
+                
+                // Only process note-on messages (ignore note-off)
+                if ((parser.msg[0] & 0xF0) == MIDI_NOTE_ON && parser.msg[2] != 0 && keycode != 0) {
+                    // Enqueue key press event
+                    keyboard_event_enqueue(KEY_PRESS, keycode, 50);
+                }
+            }
+        }
+    }
+}
+
+bool rppicomidi::Midi2PioUsbhub::keyboard_event_enqueue(keyboard_action_t action, uint8_t keycode, uint8_t midi_note)
+{
+    // Check if buffer is full
+    if (keyboard_buffer.count >= KEYBOARD_EVENT_BUFFER_SIZE) {
+        printf("Keyboard event buffer full, dropping event\n");
+        return false;
+    }
+    
+    // Add event to buffer
+    keyboard_buffer.events[keyboard_buffer.head] = {action, keycode, midi_note};
+    keyboard_buffer.head = (keyboard_buffer.head + 1) % KEYBOARD_EVENT_BUFFER_SIZE;
+    keyboard_buffer.count++;
+    
+    printf("Enqueued keyboard event: action=%d, keycode=%d, note=%d (count=%zu)\n", 
+          action, keycode, midi_note, keyboard_buffer.count);
+    return true;
+}
+
+bool rppicomidi::Midi2PioUsbhub::keyboard_event_dequeue(keyboard_event_t* event)
+{
+    // Check if buffer is empty
+    if (keyboard_buffer.count == 0) {
+        return false;
+    }
+    
+    // Get event from buffer
+    *event = keyboard_buffer.events[keyboard_buffer.tail];
+    keyboard_buffer.tail = (keyboard_buffer.tail + 1) % KEYBOARD_EVENT_BUFFER_SIZE;
+    keyboard_buffer.count--;
+    
+    return true;
+}
+
+void rppicomidi::Midi2PioUsbhub::keyboard_task()
+{
+    const uint32_t interval_ms = 10;
+    static uint32_t start_ms = 0;
+    
+    // Rate limiting like in the working keyboard example
+    uint32_t current_ms = to_ms_since_boot(get_absolute_time());
+    if (current_ms - start_ms < interval_ms) return;
+    start_ms += interval_ms;
+    
+    // Early return if HID not ready
+    if (!tud_hid_ready()) {
+        return;
+    }
+    
+    // Check for pending key release timer
+    if (pending_key_release && current_ms >= key_release_time_ms) {
+        // Time to send all keys released
+        tud_hid_keyboard_report(REPORT_ID_KEYBOARD, 0, NULL);
+        pending_key_release = false;
+    }
+    
+    // Process one event from the buffer
+    keyboard_event_t event;
+    if (keyboard_event_dequeue(&event)) {
+        printf("Dequeued event: action=%d, keycode=0x%02X, midi_note=%d\n", 
+               event.action, event.keycode, event.midi_note);
+               
+        if (event.action == KEY_PRESS) {
+            // Send key press report - create proper array like working keyboard example
+            uint8_t keycodes[6] = { 0 };  // Array of 6 key codes, initialized to 0
+            keycodes[0] = event.keycode;  // Set the first key code
+            printf("Sending HID key press: keycode=0x%02X\n", event.keycode);
+            tud_hid_keyboard_report(REPORT_ID_KEYBOARD, 0, keycodes);  // Pass array, not pointer to single byte
+            
+            // Set timer for key release (500ms from now)
+            pending_key_release = true;
+            key_release_time_ms = current_ms + 100;
+        }
+        // Note: We no longer process KEY_RELEASE events from MIDI
     }
 }
 
@@ -612,6 +754,9 @@ rppicomidi::Midi2PioUsbhub::Midi2PioUsbhub() : cli{&preset_manager}
     ble_midi_out_port.cable = 0;
     ble_midi_out_port.devaddr = ble_devaddr;
     ble_midi_out_port.nickname = "BT-MIDI-IN";  // it's named backwards because MIDI IN from the BT Client (PC, iPad, etc.) comes from this device's MIDI OUT
+    keyboard_midi_out_port.cable = 0;
+    keyboard_midi_out_port.devaddr = keyboard_devaddr;
+    keyboard_midi_out_port.nickname = "KEYBOARD";
     attached_devices[uart_devaddr].vid = 0;
     attached_devices[uart_devaddr].pid = 0;
     attached_devices[uart_devaddr].product_name = "MIDI A";
@@ -630,12 +775,30 @@ rppicomidi::Midi2PioUsbhub::Midi2PioUsbhub() : cli{&preset_manager}
     attached_devices[ble_devaddr].rx_cables = 1;
     attached_devices[ble_devaddr].tx_cables = 1;
     attached_devices[ble_devaddr].configured = false;
+    attached_devices[keyboard_devaddr].vid = 0;
+    attached_devices[keyboard_devaddr].pid = 3;
+    attached_devices[keyboard_devaddr].product_name = "Keyboard";
+    attached_devices[keyboard_devaddr].rx_cables = 1;
+    attached_devices[keyboard_devaddr].tx_cables = 1;
+    attached_devices[keyboard_devaddr].configured = true;
     midi_in_port_list.push_back(&uart_midi_in_port);
     midi_out_port_list.push_back(&uart_midi_out_port);
     midi_in_port_list.push_back(&usbdev_midi_in_port);
     midi_out_port_list.push_back(&usbdev_midi_out_port);
     midi_in_port_list.push_back(&ble_midi_in_port);
     midi_out_port_list.push_back(&ble_midi_out_port);
+    midi_out_port_list.push_back(&keyboard_midi_out_port);
+    
+    // Initialize keyboard buffer and state
+    // Initialize keyboard buffer
+    keyboard_buffer.head = 0;
+    keyboard_buffer.tail = 0;
+    keyboard_buffer.count = 0;
+    
+    // Initialize timer-based key release
+    pending_key_release = false;
+    key_release_time_ms = 0;
+    
     preset_manager.init();
 
     cli.printWelcome();
@@ -717,6 +880,8 @@ void rppicomidi::Midi2PioUsbhub::task()
 
     midi_uart_drain_tx_buffer(midi_uart_instance);
 
+    // Process keyboard events
+    keyboard_task();
 
     cli.task();
     if (cli_up_message_pending)
@@ -800,6 +965,70 @@ void get_info_from_default_nickname(std::string nickname, uint16_t &vid, uint16_
     pid = std::stoi(nickname.substr(5, 4), 0, 16);
     cable = std::stoi(nickname.substr(10, std::string::npos));
     is_from = nickname.substr(9, 1) == "F";
+}
+
+//--------------------------------------------------------------------+
+// HID Callbacks
+//--------------------------------------------------------------------+
+
+// Invoked when sent REPORT successfully to host
+void tud_hid_report_complete_cb(uint8_t instance, uint8_t const* report, uint16_t len)
+{
+  (void) instance;
+  (void) report;
+  (void) len;
+  // Could schedule key release here if needed
+}
+
+// Invoked when received GET_REPORT control request
+uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type, uint8_t* buffer, uint16_t reqlen)
+{
+  (void) instance;
+  (void) report_id;
+  (void) report_type;
+  (void) buffer;
+  (void) reqlen;
+  return 0;
+}
+
+// Invoked when received SET_REPORT control request
+void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type, uint8_t const* buffer, uint16_t bufsize)
+{
+  (void) instance;
+  (void) report_id;
+  (void) report_type;
+  (void) buffer;
+  (void) bufsize;
+}
+
+//--------------------------------------------------------------------+
+// USB Device Callbacks
+//--------------------------------------------------------------------+
+
+// Invoked when device is mounted
+void tud_mount_cb(void)
+{
+  printf("USB Device mounted\r\n");
+}
+
+// Invoked when device is unmounted
+void tud_umount_cb(void)
+{
+  printf("USB Device unmounted\r\n");
+}
+
+// Invoked when usb bus is suspended
+void tud_suspend_cb(bool remote_wakeup_en)
+{
+  (void) remote_wakeup_en;
+  printf("USB Device suspended\r\n");
+}
+
+// Invoked when usb bus is resumed
+void tud_resume_cb(void)
+{
+  printf("USB Device resumed\r\n");
+  rppicomidi::Midi2PioUsbhub::instance().keyboard_task();
 }
 
 

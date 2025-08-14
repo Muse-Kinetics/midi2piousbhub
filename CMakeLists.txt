@@ -12,7 +12,8 @@ if (EXISTS ${picoVscode})
     include(${picoVscode})
 endif()
 # ====================================================================================
-set(PICO_BOARD pico CACHE STRING "Board type")
+#set(PICO_BOARD pico CACHE STRING "Board type")
+set(PICO_BOARD adafruit_feather_rp2040_usb_host CACHE STRING "Board type")
 
 cmake_minimum_required(VERSION 3.13)
 
@@ -38,6 +39,7 @@ add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/lib/midi_uart_lib)
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/lib/rp2040_rtc)
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/lib/usb_midi_host)
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/lib/cdc_stdio_lib)
+add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/midi_cpp)
 
 set(EMBEDDED_CLI_PATH ${CMAKE_CURRENT_LIST_DIR}/ext_lib/embedded-cli/lib/)
 add_executable(midi2piousbhub
@@ -59,12 +61,13 @@ target_include_directories(midi2piousbhub PRIVATE
  ${EMBEDDED_CLI_PATH}/include
  ${CMAKE_CURRENT_LIST_DIR}/ext_lib/parson
  ${PICO_SDK_PATH}/lib/tinyusb/hw/mcu/raspberry_pi/Pico-PIO-USB
+ ${CMAKE_CURRENT_LIST_DIR}/midi_cpp/include
 )
 
 target_link_options(midi2piousbhub PRIVATE -Xlinker --print-memory-usage)
 target_compile_options(midi2piousbhub PRIVATE -Wall -Wextra -DPICO_HEAP_SIZE=0x20000)
 target_link_libraries(midi2piousbhub midi_uart_lib tinyusb_host tinyusb_device tinyusb_board usb_midi_host_app_driver ring_buffer_lib pico_stdlib
-littlefs-lib msc_fatfs rp2040_rtc pico_multicore tinyusb_pico_pio_usb cdc_stdio_lib)
+littlefs-lib msc_fatfs rp2040_rtc pico_multicore tinyusb_pico_pio_usb cdc_stdio_lib MIDI_CPP)
 if(DEFINED PICO_BOARD)
 if(${PICO_BOARD} MATCHES "pico_w")
 message("board is pico_w")

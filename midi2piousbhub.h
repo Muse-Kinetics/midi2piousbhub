@@ -42,6 +42,31 @@
 #ifdef RPPICOMIDI_PICO_W
 #include "ble_midi_manager.h"
 #endif
+
+// Fallthrough macro for intentional switch case fall-through
+#define FALL_THRU [[fallthrough]]
+
+// Keyboard event buffer configuration
+#define KEYBOARD_EVENT_BUFFER_SIZE 100
+
+typedef enum {
+    KEY_PRESS,
+    KEY_RELEASE
+} keyboard_action_t;
+
+typedef struct {
+    keyboard_action_t action;
+    uint8_t keycode;     // HID keycode (like HID_KEY_A)
+    uint8_t midi_note;   // Original MIDI note for reference
+} keyboard_event_t;
+
+typedef struct {
+    keyboard_event_t events[KEYBOARD_EVENT_BUFFER_SIZE];
+    volatile size_t head;      // Write index
+    volatile size_t tail;      // Read index
+    volatile size_t count;     // Number of events in buffer
+} keyboard_event_buffer_t;
+
 namespace rppicomidi
 {
     class Midi2PioUsbhub
@@ -195,10 +220,14 @@ namespace rppicomidi
 #else
         void load_current_preset();
 #endif
+        void keyboard_task();
     private:
         Midi2PioUsbhub();
         Preset_manager preset_manager;
         void route_midi(Midi_out_port* out_port, const uint8_t* buffer, uint32_t bytes_read);
+        void route_midi_to_keyboard(const uint8_t* buffer, uint32_t bytes_read);
+        bool keyboard_event_enqueue(keyboard_action_t action, uint8_t keycode, uint8_t midi_note);
+        bool keyboard_event_dequeue(keyboard_event_t* event);
 
         static void langid_cb(tuh_xfer_t *xfer);
         static void prod_str_cb(tuh_xfer_t *xfer);
@@ -216,10 +245,11 @@ namespace rppicomidi
         static const uint8_t uart_devaddr = CFG_TUH_DEVICE_MAX + 1;
         static const uint8_t usbdev_devaddr = CFG_TUH_DEVICE_MAX + 2;
         static const uint8_t ble_devaddr = CFG_TUH_DEVICE_MAX + 3;
+        static const uint8_t keyboard_devaddr = CFG_TUH_DEVICE_MAX + 4;
         // Indexed by dev_addr
         // device addresses start at 1. location 0 is unused
-        // extra entries are for the UART MIDI Port and USB device port and the BLE server port
-        Midi_device_info attached_devices[CFG_TUH_DEVICE_MAX + 4];
+        // extra entries are for the UART MIDI Port and USB device port and the BLE server port and keyboard
+        Midi_device_info attached_devices[CFG_TUH_DEVICE_MAX + 5];
 
         std::vector<Midi_out_port *> midi_out_port_list;
         std::vector<Midi_in_port *> midi_in_port_list;
@@ -230,6 +260,13 @@ namespace rppicomidi
         Midi_out_port usbdev_midi_out_port;
         Midi_in_port ble_midi_in_port;
         Midi_out_port ble_midi_out_port;
+        Midi_out_port keyboard_midi_out_port;
+
+        // Keyboard event buffer
+        keyboard_event_buffer_t keyboard_buffer;
+        // Timer-based key release
+        bool pending_key_release;
+        uint32_t key_release_time_ms;
         #if RPPICOMIDI_PICO_W
         BLE_MIDI_Manager blem;
         bool blem_is_client;

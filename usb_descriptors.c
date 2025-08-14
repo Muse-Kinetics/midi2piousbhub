@@ -24,6 +24,25 @@
  */
 
 #include "tusb.h"
+#include "pico/unique_id.h"
+#include <stdio.h>
+
+//--------------------------------------------------------------------+
+// HID Report Descriptor
+//--------------------------------------------------------------------+
+
+uint8_t const desc_hid_report[] =
+{
+  TUD_HID_REPORT_DESC_KEYBOARD( HID_REPORT_ID(1) )
+};
+
+// Invoked when received GET HID REPORT DESCRIPTOR
+// Application return pointer to descriptor
+uint8_t const * tud_hid_descriptor_report_cb(uint8_t instance)
+{
+  (void) instance;
+  return desc_hid_report;
+}
 
 /* A combination of interfaces must have a unique product id, since PC will save device driver after the first plug.
  * Same VID/PID with different interface e.g MSC (first), then CDC (later) will possibly cause system error on PC.
@@ -48,9 +67,9 @@ tusb_desc_device_t const desc_device =
     .bDeviceProtocol    = 0x00,
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
 
-    .idVendor           = 0xCafe,
-    .idProduct          = USB_PID,
-    .bcdDevice          = 0x0100,
+    .idVendor           = 0x1F38, // KMI 
+    .idProduct          = 0x003C, // Fixed PID for BRIDGE
+    .bcdDevice          = 0x0001, // Device version
 
     .iManufacturer      = 0x01,
     .iProduct           = 0x02,
@@ -77,6 +96,7 @@ enum
   ITF_NUM_CDC_DATA,
   ITF_NUM_MIDI,
   ITF_NUM_MIDI_STREAMING,
+  ITF_NUM_HID,
   ITF_NUM_TOTAL
 };
 
@@ -117,14 +137,16 @@ enum
 
 #endif
 
-#define CONFIG_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + TUD_MIDI_DESC_LEN + TUD_CDC_DESC_LEN)
+#define CONFIG_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + TUD_MIDI_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_DESC_LEN)
 
 #if CFG_TUSB_MCU == OPT_MCU_LPC175X_6X || CFG_TUSB_MCU == OPT_MCU_LPC177X_8X || CFG_TUSB_MCU == OPT_MCU_LPC40XX
   // LPC 17xx and 40xx endpoint type (bulk/interrupt/iso) are fixed by its number
   // 0 control, 1 In, 2 Bulk, 3 Iso, 4 In etc ...
   #define EPNUM_MIDI   0x02
+  #define EPNUM_HID    0x04
 #else
   #define EPNUM_MIDI   0x03
+  #define EPNUM_HID    0x84
 #endif
 
 uint8_t const desc_fs_configuration[] =
@@ -134,7 +156,9 @@ uint8_t const desc_fs_configuration[] =
   // Interface number, string index, EP notification address and size, EP data address (out, in) and size.
   TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 4, EPNUM_CDC_NOTIF, 8, EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),
   // Interface number, string index, EP Out & EP In address, EP size
-  TUD_MIDI_DESCRIPTOR(ITF_NUM_MIDI, 5, EPNUM_MIDI, 0x80 | EPNUM_MIDI, 64)
+  TUD_MIDI_DESCRIPTOR(ITF_NUM_MIDI, 5, EPNUM_MIDI, 0x80 | EPNUM_MIDI, 64),
+  // Interface number, string index, protocol, report descriptor len, EP In address, size & polling interval
+  TUD_HID_DESCRIPTOR(ITF_NUM_HID, 6, HID_ITF_PROTOCOL_KEYBOARD, sizeof(desc_hid_report), EPNUM_HID, CFG_TUD_HID_EP_BUFSIZE, 5)
 };
 
 #if TUD_OPT_HIGH_SPEED
@@ -171,14 +195,26 @@ uint8_t const * tud_descriptor_configuration_cb(uint8_t index)
 char const* string_desc_arr [] =
 {
   (const char[]) { 0x09, 0x04 }, // 0: is supported language is English (0x0409)
-  "TinyUSB",                     // 1: Manufacturer
-  "TinyUSB Device",              // 2: Product
-  "123456",                      // 3: Serials, should use chip ID
-  "TinyUSB CDC",                 // 4: The CDC Interface
-  "TinyUSB MIDI",                // 5: The MIDI Interface
+  "Muse Kinetics",               // 1: Manufacturer
+  "Bridge",                      // 2: Product
+  "",                            // 3: Serial - dynamically generated from chip ID
+  "Bridge CDC",                  // 4: The CDC Interface
+  "Bridge MIDI",                 // 5: The MIDI Interface
+  "Bridge HID",                  // 6: The HID Interface
 };
 
 static uint16_t _desc_str[32];
+
+// Generate chip ID string for USB serial number
+static void get_chip_id_string(char* str, size_t len) {
+    pico_unique_board_id_t board_id;
+    pico_get_unique_board_id(&board_id);
+    
+    // Format as 16-character hex string (8 bytes * 2 hex chars per byte)
+    snprintf(str, len, "%02X%02X%02X%02X%02X%02X%02X%02X",
+             board_id.id[0], board_id.id[1], board_id.id[2], board_id.id[3],
+             board_id.id[4], board_id.id[5], board_id.id[6], board_id.id[7]);
+}
 
 // Invoked when received GET STRING DESCRIPTOR request
 // Application return pointer to descriptor, whose contents must exist long enough for transfer to complete
@@ -192,7 +228,22 @@ uint16_t const* tud_descriptor_string_cb(uint8_t index, uint16_t langid)
   {
     memcpy(&_desc_str[1], string_desc_arr[0], 2);
     chr_count = 1;
-  }else
+  }
+  else if ( index == 3) // Serial number - use chip ID
+  {
+    static char serial_str[17]; // 16 hex chars + null terminator
+    get_chip_id_string(serial_str, sizeof(serial_str));
+    
+    // Convert ASCII string into UTF-16
+    chr_count = strlen(serial_str);
+    if ( chr_count > 31 ) chr_count = 31;
+    
+    for(uint8_t i=0; i<chr_count; i++)
+    {
+      _desc_str[1+i] = serial_str[i];
+    }
+  }
+  else
   {
     // Note: the 0xEE index string is a Microsoft OS 1.0 Descriptors.
     // https://docs.microsoft.com/en-us/windows-hardware/drivers/usbcon/microsoft-defined-usb-descriptors
