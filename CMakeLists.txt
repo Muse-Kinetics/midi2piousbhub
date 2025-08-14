@@ -44,6 +44,7 @@ add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/midi_cpp)
 set(EMBEDDED_CLI_PATH ${CMAKE_CURRENT_LIST_DIR}/ext_lib/embedded-cli/lib/)
 add_executable(midi2piousbhub
     midi2piousbhub.cpp
+    midi_hid.cpp
     preset_manager.cpp
     pico_lfs_cli.cpp
     pico_fatfs_cli.cpp
@@ -68,6 +69,9 @@ target_link_options(midi2piousbhub PRIVATE -Xlinker --print-memory-usage)
 target_compile_options(midi2piousbhub PRIVATE -Wall -Wextra -DPICO_HEAP_SIZE=0x20000)
 target_link_libraries(midi2piousbhub midi_uart_lib tinyusb_host tinyusb_device tinyusb_board usb_midi_host_app_driver ring_buffer_lib pico_stdlib
 littlefs-lib msc_fatfs rp2040_rtc pico_multicore tinyusb_pico_pio_usb cdc_stdio_lib MIDI_CPP)
+
+# Add project root to MIDI_CPP include directories so it can find MIDI_CPP_config.hpp
+target_include_directories(MIDI_CPP PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 if(DEFINED PICO_BOARD)
 if(${PICO_BOARD} MATCHES "pico_w")
 message("board is pico_w")
